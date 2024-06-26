@@ -1,0 +1,180 @@
+<template>
+    <lightning-card title="Schedule an Appointment" icon-name="action:new_event">
+        <div class="slds-p-around_medium">
+            <lightning-record-edit-form object-api-name="Appointment_Details__c" onsuccess={handleSuccess} onerror={handleError}>
+                <lightning-messages></lightning-messages>
+
+                <lightning-input-field field-name="Contact__c" onchange={handleInputChange} required></lightning-input-field>
+                
+                <lightning-input-field field-name="Subject__c" onchange={handleInputChange} required></lightning-input-field>
+
+                <div class="slds-grid slds-gutters"> &nbsp; &nbsp; &nbsp;
+                <lightning-combobox
+                    name="appointmentDate"
+                    label="Appointment Date"
+                    value={appointmentDate}
+                    placeholder="Select Appointment Date"
+                    options={availableDates}
+                    onchange={handleDateChange}                    
+                    required>
+                </lightning-combobox> &nbsp;&nbsp;&nbsp; &nbsp;
+                    <div class="slds-grid slds-gutters"> 
+                        <lightning-input type="time" label="Appointment Time" value={appointmentTime} onchange={handleTimeChange} required></lightning-input>
+                    </div>
+                </div>
+                
+                <lightning-input-field field-name="Description__c" onchange={handleInputChange} required></lightning-input-field>
+                
+                <lightning-button class="slds-m-top_medium" variant="brand" type="button" label="Save" onclick={handleSave}></lightning-button>
+            </lightning-record-edit-form>
+        </div>
+    </lightning-card>
+</template>
+
+
+
+
+
+import { LightningElement, track, wire } from 'lwc';
+import getAvailableDates from '@salesforce/apex/AppointmentFormController.getAvailableDates';
+import saveAppointment from '@salesforce/apex/AppointmentFormController.saveAppointment';
+import { ShowToastEvent } from 'lightning/platformShowToastEvent';
+
+export default class AppointmentForm extends LightningElement {
+    @track availableDates = [];
+    @track appointmentDate;
+    @track appointmentTime;
+    contact;
+    subject;
+    description;
+
+    @wire(getAvailableDates)
+    wiredDates({ error, data }) {
+        if (data) {
+            console.log('Data >> ' + data);
+            this.availableDates = data.map(date => {
+                return { label: date, value: date };
+            });
+        } else if (error) {
+            this.showToast('Error', error.body.message, 'error');
+        }
+    }
+
+    handleDateChange(event) {
+        this.appointmentDate = event.target.value;
+        console.log('Data == ' + this.appointmentDate);
+    }
+
+    handleTimeChange(event) {
+        this.appointmentTime = event.target.value;
+    }
+
+    handleInputChange(event) {
+        const field = event.target.fieldName;
+        console.log('Fields >> ' + field);
+        if (field === 'Contact__c') {
+            this.contact = event.target.value;
+        } else if (field === 'Subject__c') {
+            this.subject = event.target.value;
+        } else if (field === 'Description__c') {
+            this.description = event.target.value;
+        }
+    }
+
+    handleSave() {
+        const appointmentDetails = {
+            appointmentDate: this.appointmentDate,
+            appointmentTime: this.appointmentTime,
+            contact: this.contact,
+            subject: this.subject,
+            description: this.description
+        };
+
+        saveAppointment({ appointmentDetails: appointmentDetails })
+            .then(() => {
+                this.dispatchEvent(
+                    new ShowToastEvent({
+                        title: 'Success',
+                        message: 'Appointment created',
+                        variant: 'success',
+                    })
+                );
+            })
+            .catch(error => {
+                this.dispatchEvent(
+                    new ShowToastEvent({
+                        title: 'Error creating record',
+                        message: this.reduceErrors(error).join(', '),
+                        variant: 'error',
+                    })
+                );
+            });
+    }
+
+    reduceErrors(errors) {
+        if (!Array.isArray(errors)) {
+            errors = [errors];
+        }
+
+        return (
+            errors
+                .filter(error => !!error)
+                .map(error => {
+                    if (Array.isArray(error.body)) {
+                        return error.body.map(e => e.message);
+                    } else if (error.body && typeof error.body.message === 'string') {
+                        return error.body.message;
+                    } else if (typeof error.message === 'string') {
+                        return error.message;
+                    }
+                    return error.statusText;
+                })
+                .reduce((prev, curr) => prev.concat(curr), [])
+                .filter(message => !!message)
+        );
+    }
+}
+
+
+
+
+public with sharing class AppointmentFormController {
+   
+    @AuraEnabled(cacheable=true)
+    public static List<String> getAvailableDates() {
+        List<Appointment_Slots__c> slots = [
+            SELECT Appointment_Date__c
+            FROM Appointment_Slots__c
+            WHERE isActive__c = true
+        ];
+        Set<Date> uniqueDates = new Set<Date>();
+        for (Appointment_Slots__c slot : slots) {
+            uniqueDates.add(slot.Appointment_Date__c);            
+        }
+        List<String> dateStrings = new List<String>();
+        for (Date uniqueDate : uniqueDates) {
+            dateStrings.add(uniqueDate.format());
+        }
+        return dateStrings;
+    }
+    
+   
+    @AuraEnabled
+    public static void saveAppointment(Map<String, String> appointmentDetails) {
+        Appointment_Details__c newAppointment = new Appointment_Details__c();
+        newAppointment.Appointment_Date__c = Date.Parse(appointmentDetails.get('appointmentDate'));
+
+        // Parse the time string (e.g., "14:30") into hours and minutes
+        String[] timeParts = appointmentDetails.get('appointmentTime').split(':');
+        Integer hours = Integer.valueOf(timeParts[0]);
+        Integer minutes = Integer.valueOf(timeParts[1]);
+        Time appointmentTime = Time.newInstance(hours, minutes, 0, 0);
+        newAppointment.Appointment_Time__c = appointmentTime;
+
+        newAppointment.Contact__c = appointmentDetails.get('contact');
+        newAppointment.Subject__c = appointmentDetails.get('subject');
+        newAppointment.Description__c = appointmentDetails.get('description');
+
+        insert newAppointment;
+    }
+}
